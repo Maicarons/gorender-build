@@ -1,49 +1,104 @@
-name: Build (Windows)
+name: release
 
 on:
   push:
     branches: [ master ]
   pull_request:
     branches: [ master ]
+  workflow_dispatch:
+  # 可选：如果你希望只在打 tag 时发布 Release，则保留以下：
+  # push:
+  #   tags:
+  #     - 'v*'
 
 jobs:
-
   build:
-    name: Build
-    runs-on: windows-latest
+    name: Build ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+
     steps:
+      - name: Set up Go
+        uses: actions/setup-go@v2
+        with:
+          go-version: ^1.21
 
-    - name: Set up Go 1.x
-      uses: actions/setup-go@v2
-      with:
-        go-version: ^1.21
-      id: go
+      - name: Check out code
+        uses: actions/checkout@v2
 
-    - name: Check out code into the Go module directory
-      uses: actions/checkout@v2
+      - name: Get dependencies
+        run: go get -v -t -d ./...
 
-    - name: Get dependencies
-      run: go get -v -t -d ./...
+      - name: Vet
+        run: go vet -v ./...
 
-    - name: Vet
-      run: go vet -v ./...
+      - name: Test
+        run: go test -v ./...
 
-    - name: Test
-      run: go test -v ./...
-      
-    - name: Build
-      run: go build -v ./cmd/renderobject.go
+      - name: Build binary
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            go build -v -o renderobject.exe ./cmd/renderobject.go
+          else
+            go build -v -o renderobject ./cmd/renderobject.go
+          fi
+        shell: bash
 
-    - name: Create artifact dir
-      run: mkdir output
-    
-    - name: Move artifacts
-      run: |
-        move renderobject.exe output
-        move README.md output
-        move files output
+      - name: Create artifact dir
+        run: mkdir -p output
 
-    - uses: actions/upload-artifact@v4
-      with:
-        name: gorender-windows
-        path: output/*
+      - name: Move artifacts
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            mv renderobject.exe output/
+          else
+            mv renderobject output/
+          fi
+          mv README.md output/
+          mv files output/
+        shell: bash
+
+      - name: Compress artifacts
+        run: |
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            powershell Compress-Archive -Path output\* -DestinationPath gorender-windows.zip
+          else
+            zip -r gorender-${{ matrix.os }}.zip output
+          fi
+        shell: bash
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: gorender-${{ matrix.os }}
+          path: |
+            gorender-*.zip
+
+  release:
+    name: Create GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')  # 仅在打 tag 时执行（例如 v1.0.0）
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: ./artifacts
+
+      - name: List artifacts
+        run: ls -R ./artifacts
+
+      - name: Create Release and Upload Assets
+        uses: softprops/action-gh-release@v2
+        with:
+          name: "gorender ${{ github.ref_name }}"
+          tag_name: ${{ github.ref_name }}
+          body: |
+            ## ${{ github.ref_name }}
+          files: |
+            artifacts/**/gorender-*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
