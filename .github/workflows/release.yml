@@ -3,13 +3,12 @@ name: release
 on:
   push:
     branches: [ master ]
+    tags:
+      - '*'
   pull_request:
     branches: [ master ]
   workflow_dispatch:
-  # 可选：如果你希望只在打 tag 时发布 Release，则保留以下：
-  # push:
-  #   tags:
-  #     - 'v*'
+    
 
 jobs:
   build:
